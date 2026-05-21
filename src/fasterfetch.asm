@@ -11,8 +11,6 @@ section .data
     l_de    db "DE:         ", 0
     l_wm    db "WM:         ", 0
     l_term  db "Terminal:   ", 0
-    l_font  db "Font:       ", 0
-    l_icn   db "Icons:      ", 0
     l_cpu   db "CPU:        ", 0
     l_gpu   db "GPU:        ", 0
     l_ram   db "Memory:     ", 0
@@ -23,15 +21,23 @@ section .data
 
     s_at    db "@", 0
     s_mb    db " MB", 0
+    s_gb    db " GB", 0
     s_sep   db " / ", 0
     s_min   db " mins", 0
     s_dash  db "-----------------", 10, 0
-    nl      db 10, 0
+    s_dot   db ".", 0
+    s_col   db ":", 0
     unk     db "n/a", 0
 
     p_os    db "/etc/os-release", 0
     p_mem   db "/proc/meminfo", 0
     p_upt   db "/proc/uptime", 0
+    p_host  db "/sys/class/dmi/id/product_name", 0
+    p_gpuv  db "/sys/class/drm/card0/device/vendor", 0
+    p_gpud  db "/sys/class/drm/card0/device/device", 0
+    p_root  db "/", 0
+    p_pac   db "/var/lib/pacman/local", 0
+    p_dpkg  db "/var/lib/dpkg/info", 0
 
     k_memt  db "MemTotal:", 0
     k_mema  db "MemAvailable:", 0
@@ -39,39 +45,22 @@ section .data
     k_swpf  db "SwapFree:", 0
     k_pn    db "PRETTY_NAME=", 0
 
-    sh      db "/bin/sh", 0
-    flg     db "-c", 0
+    e_usr   db "USER=", 0
+    e_sh    db "SHELL=", 0
+    e_de    db "XDG_CURRENT_DESKTOP=", 0
+    e_wm    db "XDG_SESSION_DESKTOP=", 0
+    e_term  db "TERM=", 0
+    e_loc   db "LANG=", 0
 
-    c_usr   db "echo $USER", 0
-    c_gpu   db "lspci 2>/dev/null | grep -i vga | cut -d: -f3 | sed 's/^ *//'", 0
-    c_dsk   db "df -h / 2>/dev/null | awk 'NR==2{print $3 ", 34, " / ", 34, " $2}'", 0
-    c_fnt   db "fc-match 2>/dev/null | awk '{print $1}' | tr -d ':'", 0
-    c_icn   db "find /usr/share/icons -maxdepth 1 -type d 2>/dev/null | tail -1 | xargs basename", 0
-    c_pkg   db "if command -v rpm >/dev/null 2>&1; then rpm -qa; elif command -v pacman >/dev/null 2>&1; then pacman -Qq; elif command -v dpkg >/dev/null 2>&1; then dpkg-query -f '.\n' -W; else ls -d /var/db/pkg/*/*; fi 2>/dev/null | wc -l", 0
-    c_ip    db "ip r get 1.1.1.1 2>/dev/null | awk '{print $7}'", 0
-    c_sh    db "echo $SHELL", 0
-    c_de    db "echo ${XDG_CURRENT_DESKTOP:-n/a}", 0
-    c_wm    db "echo ${XDG_SESSION_DESKTOP:-${DESKTOP_SESSION:-n/a}}", 0
-    c_term  db "echo $TERM", 0
-    c_loc   db "echo $LANG", 0
-
-    a_usr   dq sh, flg, c_usr, 0
-    a_gpu   dq sh, flg, c_gpu, 0
-    a_dsk   dq sh, flg, c_dsk, 0
-    a_fnt   dq sh, flg, c_fnt, 0
-    a_icn   dq sh, flg, c_icn, 0
-    a_pkg   dq sh, flg, c_pkg, 0
-    a_ip    dq sh, flg, c_ip, 0
-    a_sh    dq sh, flg, c_sh, 0
-    a_de    dq sh, flg, c_de, 0
-    a_wm    dq sh, flg, c_wm, 0
-    a_term  dq sh, flg, c_term, 0
-    a_loc   dq sh, flg, c_loc, 0
+    saddr   dw 2
+            dw 0x3500
+            dd 0x01010101
+            dq 0
+    slen    dd 16
 
 section .bss
     rawbuf  resb 8192
     outbuf  resb 4096
-    xbuf    resb 1024
     un      resb 390
     envptr  resq 1
     outpos  resq 1
@@ -86,15 +75,15 @@ append:
     push rbx
     push rcx
     mov  rbx, [outpos]
-.loop:
+.lp:
     movzx ecx, byte [rsi]
     test  ecx, ecx
-    jz    .end
+    jz    .fin
     mov   [outbuf+rbx], cl
     inc   rsi
     inc   rbx
-    jmp   .loop
-.end:
+    jmp   .lp
+.fin:
     mov  [outpos], rbx
     pop  rcx
     pop  rbx
@@ -136,7 +125,6 @@ numcat:
     ret
 
 slurp:
-    ; open
     push rbx
     mov  eax, 2
     xor  esi, esi
@@ -145,14 +133,12 @@ slurp:
     test rax, rax
     js   .err
     mov  rbx, rax
-    ; read
     xor  eax, eax
     mov  edi, ebx
     lea  rsi, [rawbuf]
     mov  edx, 8191
     syscall
     push rax
-    ; close
     mov  eax, 3
     mov  edi, ebx
     syscall
@@ -180,14 +166,14 @@ atoi:
 .d:
     movzx edx, byte [rbx]
     sub   edx, '0'
-    js    .end
+    js    .fin
     cmp   edx, 9
-    jg    .end
+    jg    .fin
     imul  rax, rax, 10
     add   eax, edx
     inc   rbx
     jmp   .d
-.end:
+.fin:
     ret
 
 cmpn:
@@ -218,10 +204,60 @@ cmpn:
     pop  rsi
     ret
 
+getenv:
+    mov r8, [envptr]
+.lp:
+    mov rdi, [r8]
+    test rdi, rdi
+    jz .fail
+    push rsi
+    push rdi
+.chr:
+    movzx eax, byte [rsi]
+    test eax, eax
+    jz .mtc
+    movzx ebx, byte [rdi]
+    cmp eax, ebx
+    jne .nxt
+    inc rsi
+    inc rdi
+    jmp .chr
+.mtc:
+    mov rax, rdi
+    pop rdi
+    pop rsi
+    ret
+.nxt:
+    pop rdi
+    pop rsi
+    add r8, 8
+    jmp .lp
+.fail:
+    xor eax, eax
+    ret
+
+sysfsr:
+    call slurp
+    test rax, rax
+    jz .err
+    lea rbx, [rawbuf]
+    add rbx, rax
+    dec rbx
+    cmp byte [rbx], 10
+    jne .prt
+    mov byte [rbx], 0
+.prt:
+    lea rsi, [rawbuf]
+    call append
+    ret
+.err:
+    lea rsi, [unk]
+    call append
+    ret
+
 memparse:
     push rbx
     push rcx
-    ; zero
     xor  rax, rax
     mov  [memt], rax
     mov  [mema], rax
@@ -230,13 +266,13 @@ memparse:
     lea  rdi, [p_mem]
     call slurp
     test rax, rax
-    jz   .done
+    jz   .fin
     mov  byte [rawbuf+rax], 0
     lea  rbx, [rawbuf]
-.scan:
+.scn:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .done
+    jz    .fin
     lea   rsi, [k_memt]
     mov   rdi, rbx
     mov   ecx, 9
@@ -274,24 +310,24 @@ memparse:
     mov   rdi, rbx
     mov   ecx, 9
     call  cmpn
-    jnz   .skip
+    jnz   .skp
     add   rbx, 9
     call  skipws
     call  atoi
     mov   [swpf], rax
-.skip:
+.skp:
 .nl:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .done
+    jz    .fin
     cmp   ecx, 10
-    je    .step
+    je    .stp
     inc   rbx
     jmp   .nl
-.step:
+.stp:
     inc   rbx
-    jmp   .scan
-.done:
+    jmp   .scn
+.fin:
     pop  rcx
     pop  rbx
     ret
@@ -305,7 +341,7 @@ osname:
     jz   .fail
     mov  byte [rawbuf+rax], 0
     lea  rbx, [rawbuf]
-.scan:
+.scn:
     movzx ecx, byte [rbx]
     test  ecx, ecx
     jz    .fail
@@ -313,39 +349,39 @@ osname:
     mov   rdi, rbx
     mov   ecx, 12
     call  cmpn
-    jnz   .next
+    jnz   .nxt
     add   rbx, 12
     movzx ecx, byte [rbx]
     cmp   ecx, 34
-    jne   .copy
+    jne   .cpy
     inc   rbx
-.copy:
+.cpy:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .end
+    jz    .fin
     cmp   ecx, 34
-    je    .end
+    je    .fin
     cmp   ecx, 10
-    je    .end
+    je    .fin
     mov   cl, byte [rbx]
     call  putch
     inc   rbx
-    jmp   .copy
-.end:
+    jmp   .cpy
+.fin:
     pop  rcx
     pop  rbx
     ret
-.next:
+.nxt:
     movzx ecx, byte [rbx]
     test  ecx, ecx
     jz    .fail
     cmp   ecx, 10
-    je    .step
+    je    .stp
     inc   rbx
-    jmp   .next
-.step:
+    jmp   .nxt
+.stp:
     inc   rbx
-    jmp   .scan
+    jmp   .scn
 .fail:
     lea  rsi, [unk]
     call append
@@ -353,96 +389,7 @@ osname:
     pop  rbx
     ret
 
-exec:
-    ; pipe
-    push rdi
-    sub  rsp, 8
-    mov  rdi, rsp
-    mov  eax, 22
-    syscall
-    ; fork
-    mov  eax, 57
-    syscall
-    test rax, rax
-    jz   child
-    ; close
-    mov  eax, 3
-    mov  edi, dword [rsp+4]
-    syscall
-    ; read
-    xor  eax, eax
-    mov  edi, dword [rsp]
-    lea  rsi, [xbuf]
-    mov  edx, 1023
-    syscall
-    mov  r8, rax
-    ; reap
-    mov  eax, 61
-    mov  edi, -1
-    xor  esi, esi
-    xor  edx, edx
-    xor  r10d, r10d
-    syscall
-    ; close
-    mov  eax, 3
-    mov  edi, dword [rsp]
-    syscall
-    test r8, r8
-    jle  xfail
-    lea  rbx, [xbuf]
-    mov  byte [rbx+r8], 0
-rtrim:
-    test  r8, r8
-    jle   xfail
-    movzx ecx, byte [rbx+r8-1]
-    cmp   ecx, 10
-    je    rstrip
-    cmp   ecx, 32
-    je    rstrip
-    cmp   ecx, 13
-    je    rstrip
-    jmp   xdone
-rstrip:
-    mov  byte [rbx+r8-1], 0
-    dec  r8
-    jmp  rtrim
-xdone:
-    lea  rax, [xbuf]
-    add  rsp, 16
-    ret
-xfail:
-    lea  rax, [unk]
-    add  rsp, 16
-    ret
-child:
-    ; redirect
-    mov  eax, 33
-    mov  edi, dword [rsp+4]
-    mov  esi, 1
-    syscall
-    ; close
-    mov  eax, 3
-    mov  edi, dword [rsp]
-    syscall
-    ; execve
-    mov  rsi, [rsp+8]
-    lea  rdi, [sh]
-    mov  rdx, [envptr]
-    mov  eax, 59
-    syscall
-    ; exit
-    xor  edi, edi
-    mov  eax, 60
-    syscall
-
-xcat:
-    call exec
-    mov  rsi, rax
-    call append
-    ret
-
 getcpu:
-    ; cpuid
     lea  rdi, [rawbuf+6000]
     mov  eax, 0x80000002
     cpuid
@@ -466,8 +413,148 @@ getcpu:
     lea  rax, [rawbuf+6000]
     ret
 
+getip:
+    push rbp
+    mov eax, 41
+    mov edi, 2
+    mov esi, 2
+    xor edx, edx
+    syscall
+    test eax, eax
+    js .fail
+    mov ebx, eax
+    mov eax, 42
+    mov edi, ebx
+    lea rsi, [saddr]
+    mov edx, 16
+    syscall
+    mov eax, 51
+    mov edi, ebx
+    lea rsi, [saddr]
+    lea rdx, [slen]
+    syscall
+    mov eax, 3
+    mov edi, ebx
+    syscall
+    movzx eax, byte [saddr+4]
+    call numcat
+    lea rsi, [s_dot]
+    call append
+    movzx eax, byte [saddr+5]
+    call numcat
+    lea rsi, [s_dot]
+    call append
+    movzx eax, byte [saddr+6]
+    call numcat
+    lea rsi, [s_dot]
+    call append
+    movzx eax, byte [saddr+7]
+    call numcat
+    pop rbp
+    ret
+.fail:
+    lea rsi, [unk]
+    call append
+    pop rbp
+    ret
+
+getdsk:
+    mov eax, 137
+    lea rdi, [p_root]
+    lea rsi, [rawbuf+4000]
+    syscall
+    test eax, eax
+    js .fail
+    mov rax, [rawbuf+4000+16]
+    sub rax, [rawbuf+4000+24]
+    mov rcx, [rawbuf+4000+8]
+    mul rcx
+    mov rcx, 1073741824
+    xor rdx, rdx
+    div rcx
+    call numcat
+    lea rsi, [s_gb]
+    call append
+    lea rsi, [s_sep]
+    call append
+    mov rax, [rawbuf+4000+16]
+    mov rcx, [rawbuf+4000+8]
+    mul rcx
+    mov rcx, 1073741824
+    xor rdx, rdx
+    div rcx
+    call numcat
+    lea rsi, [s_gb]
+    call append
+    ret
+.fail:
+    lea rsi, [unk]
+    call append
+    ret
+
+getpkg:
+    mov eax, 2
+    lea rdi, [p_pac]
+    xor esi, esi
+    xor edx, edx
+    syscall
+    test eax, eax
+    js .dpkg
+    jmp .cnt
+.dpkg:
+    mov eax, 2
+    lea rdi, [p_dpkg]
+    xor esi, esi
+    xor edx, edx
+    syscall
+    test eax, eax
+    js .fail
+.cnt:
+    mov ebx, eax
+    xor r12, r12
+.rd:
+    mov eax, 217
+    mov edi, ebx
+    lea rsi, [rawbuf+2000]
+    mov edx, 2000
+    syscall
+    test eax, eax
+    jle .fin
+    mov r8, rax
+    xor r9, r9
+.prs:
+    cmp r9, r8
+    jge .rd
+    movzx rcx, word [rawbuf+2000+r9+16]
+    inc r12
+    add r9, rcx
+    jmp .prs
+.fin:
+    mov eax, 3
+    mov edi, ebx
+    syscall
+    sub r12, 2
+    mov rax, r12
+    call numcat
+    ret
+.fail:
+    lea rsi, [unk]
+    call append
+    ret
+
+envprt:
+    call getenv
+    test rax, rax
+    jz .unk
+    mov rsi, rax
+    call append
+    ret
+.unk:
+    lea rsi, [unk]
+    call append
+    ret
+
 flush:
-    ; write
     mov  eax, 1
     mov  edi, 1
     lea  rsi, [outbuf]
@@ -476,24 +563,24 @@ flush:
     ret
 
 _start:
-    ; init
     mov  rcx, [rsp]
     lea  r12, [rsp + rcx*8 + 16]
     mov  [envptr], r12
     xor  eax, eax
     mov  [outpos], rax
-
-    ; uname
     mov  eax, 63
     lea  rdi, [un]
     syscall
-
-    ; parse
     call memparse
 
     ; header
-    lea  rdi, [a_usr]
-    call xcat
+    lea  rsi, [e_usr]
+    call getenv
+    test rax, rax
+    jz   .nousr
+    mov  rsi, rax
+    call append
+.nousr:
     lea  rsi, [s_at]
     call append
     lea  rsi, [un+65]
@@ -511,8 +598,8 @@ _start:
     ; host
     lea  rsi, [l_host]
     call append
-    lea  rsi, [un+65]
-    call append
+    lea  rdi, [p_host]
+    call sysfsr
     call crnl
 
     ; kernel
@@ -547,50 +634,35 @@ _start:
     ; packages
     lea  rsi, [l_pkg]
     call append
-    lea  rdi, [a_pkg]
-    call xcat
+    call getpkg
     call crnl
 
     ; shell
     lea  rsi, [l_sh]
     call append
-    lea  rdi, [a_sh]
-    call xcat
+    lea  rsi, [e_sh]
+    call envprt
     call crnl
 
     ; de
     lea  rsi, [l_de]
     call append
-    lea  rdi, [a_de]
-    call xcat
+    lea  rsi, [e_de]
+    call envprt
     call crnl
 
     ; wm
     lea  rsi, [l_wm]
     call append
-    lea  rdi, [a_wm]
-    call xcat
+    lea  rsi, [e_wm]
+    call envprt
     call crnl
 
     ; terminal
     lea  rsi, [l_term]
     call append
-    lea  rdi, [a_term]
-    call xcat
-    call crnl
-
-    ; font
-    lea  rsi, [l_font]
-    call append
-    lea  rdi, [a_fnt]
-    call xcat
-    call crnl
-
-    ; icons
-    lea  rsi, [l_icn]
-    call append
-    lea  rdi, [a_icn]
-    call xcat
+    lea  rsi, [e_term]
+    call envprt
     call crnl
 
     ; cpu
@@ -604,8 +676,12 @@ _start:
     ; gpu
     lea  rsi, [l_gpu]
     call append
-    lea  rdi, [a_gpu]
-    call xcat
+    lea  rdi, [p_gpuv]
+    call sysfsr
+    lea  rsi, [s_col]
+    call append
+    lea  rdi, [p_gpud]
+    call sysfsr
     call crnl
 
     ; ram
@@ -657,22 +733,20 @@ _start:
     ; disk
     lea  rsi, [l_dsk]
     call append
-    lea  rdi, [a_dsk]
-    call xcat
+    call getdsk
     call crnl
 
     ; ip
     lea  rsi, [l_ip]
     call append
-    lea  rdi, [a_ip]
-    call xcat
+    call getip
     call crnl
 
     ; locale
     lea  rsi, [l_loc]
     call append
-    lea  rdi, [a_loc]
-    call xcat
+    lea  rsi, [e_loc]
+    call envprt
     call crnl
 
     call flush
