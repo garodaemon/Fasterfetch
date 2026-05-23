@@ -144,6 +144,7 @@ section .data
 
     gtable:
         GDEF 0x15ad, 0x0405, "VirtualBox Graphics Adapter"
+        GDEF 0x10de, 0x25a1, "NVIDIA GeForce MX550"
         GDEF 0x10de, 0x1b82, "NVIDIA GTX 1070 Ti"
         GDEF 0x10de, 0x1b87, "NVIDIA GTX 1070 Ti"
         GDEF 0x10de, 0x1b80, "NVIDIA GTX 1080"
