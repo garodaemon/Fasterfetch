@@ -1,6 +1,35 @@
 default rel
 global _start
 
+%macro PRT 1
+    lea rsi, [%1]
+    call append
+%endmacro
+
+%macro ENV 2
+    PRT %1
+    lea rsi, [%2]
+    call envprt
+    call crnl
+%endmacro
+
+%macro SYS 2
+    PRT %1
+    lea rdi, [%2]
+    call sysfsr
+    call crnl
+%endmacro
+
+%macro IPOCT 1
+    movzx eax, byte [saddr+%1]
+    call numcat
+    PRT s_dot
+%endmacro
+
+%macro GPU 2
+    db %1, 0, %2, 0
+%endmacro
+
 section .data
     l_os    db "OS:         ", 0
     l_host  db "Host:       ", 0
@@ -58,6 +87,48 @@ section .data
             dq 0
     slen    dd 16
 
+    gpudb:
+        GPU "0x15ad:0x0405", "VirtualBox Graphics Adapter"
+        GPU "0x10de:0x1b82", "NVIDIA GTX 1070 Ti"
+        GPU "0x10de:0x1b87", "NVIDIA GTX 1070 Ti"
+        GPU "0x10de:0x1b80", "NVIDIA GTX 1080"
+        GPU "0x10de:0x1b06", "NVIDIA GTX 1080 Ti"
+        GPU "0x10de:0x1f08", "NVIDIA RTX 2060"
+        GPU "0x10de:0x1e89", "NVIDIA RTX 2060"
+        GPU "0x10de:0x1f02", "NVIDIA RTX 2070"
+        GPU "0x10de:0x1e84", "NVIDIA RTX 2070"
+        GPU "0x10de:0x1e82", "NVIDIA RTX 2080"
+        GPU "0x10de:0x1e87", "NVIDIA RTX 2080"
+        GPU "0x10de:0x1e04", "NVIDIA RTX 2080 Ti"
+        GPU "0x10de:0x1e07", "NVIDIA RTX 2080 Ti"
+        GPU "0x10de:0x2507", "NVIDIA RTX 3050"
+        GPU "0x10de:0x2582", "NVIDIA RTX 3050"
+        GPU "0x10de:0x2503", "NVIDIA RTX 3060"
+        GPU "0x10de:0x2504", "NVIDIA RTX 3060"
+        GPU "0x10de:0x2486", "NVIDIA RTX 3060 Ti"
+        GPU "0x10de:0x2489", "NVIDIA RTX 3060 Ti"
+        GPU "0x10de:0x2484", "NVIDIA RTX 3070"
+        GPU "0x10de:0x2488", "NVIDIA RTX 3070"
+        GPU "0x10de:0x2482", "NVIDIA RTX 3070 Ti"
+        GPU "0x10de:0x2206", "NVIDIA RTX 3080"
+        GPU "0x10de:0x2216", "NVIDIA RTX 3080"
+        GPU "0x10de:0x2208", "NVIDIA RTX 3080 Ti"
+        GPU "0x10de:0x2204", "NVIDIA RTX 3090"
+        GPU "0x10de:0x2203", "NVIDIA RTX 3090 Ti"
+        GPU "0x10de:0x2882", "NVIDIA RTX 4060"
+        GPU "0x10de:0x2803", "NVIDIA RTX 4060 Ti"
+        GPU "0x10de:0x2786", "NVIDIA RTX 4070"
+        GPU "0x10de:0x2782", "NVIDIA RTX 4070 Ti"
+        GPU "0x10de:0x2704", "NVIDIA RTX 4080"
+        GPU "0x10de:0x2684", "NVIDIA RTX 4090"
+        GPU "0x1002:0x67df", "AMD Radeon RX 580"
+        GPU "0x1002:0x7340", "AMD Radeon RX 5500 XT"
+        GPU "0x1002:0x731f", "AMD Radeon RX 5700 XT"
+        GPU "0x1002:0x73ff", "AMD Radeon RX 6600"
+        GPU "0x1002:0x73ef", "AMD Radeon RX 6600 XT"
+        GPU "0x1002:0x73df", "AMD Radeon RX 6700 XT"
+        db 0
+
 section .bss
     rawbuf  resb 8192
     outbuf  resb 4096
@@ -75,18 +146,35 @@ append:
     push rbx
     push rcx
     mov  rbx, [outpos]
-.lp:
+apploop:
     movzx ecx, byte [rsi]
     test  ecx, ecx
-    jz    .fin
+    jz    appdone
+    cmp   rbx, 4090
+    jl    appok
+    push  rax
+    push  rdi
+    push  rsi
+    push  rdx
+    mov   eax, 1
+    mov   edi, 1
+    lea   rsi, [outbuf]
+    mov   rdx, rbx
+    syscall
+    pop   rdx
+    pop   rsi
+    pop   rdi
+    pop   rax
+    xor   rbx, rbx
+appok:
     mov   [outbuf+rbx], cl
     inc   rsi
     inc   rbx
-    jmp   .lp
-.fin:
-    mov  [outpos], rbx
-    pop  rcx
-    pop  rbx
+    jmp   apploop
+appdone:
+    mov   [outpos], rbx
+    pop   rcx
+    pop   rbx
     ret
 
 putch:
@@ -106,19 +194,26 @@ numcat:
     push rbx
     push rcx
     push rdx
-    mov  ebx, 10
+    push r8
     lea  rcx, [rawbuf+7900]
     mov  byte [rcx], 0
-.dig:
-    xor  edx, edx
-    div  rbx
-    add  dl, '0'
+    mov  r8, 0xCCCCCCCCCCCCCCCD
+numloop:
+    mov  rbx, rax
+    mul  r8
+    shr  rdx, 3
+    mov  rax, rdx
+    lea  rdx, [rdx + rdx*4]
+    add  rdx, rdx
+    sub  rbx, rdx
+    add  bl, '0'
     dec  rcx
-    mov  [rcx], dl
+    mov  [rcx], bl
     test rax, rax
-    jnz  .dig
-    mov  rsi, rcx
+    jnz  numloop
+    lea  rsi, [rcx]
     call append
+    pop  r8
     pop  rdx
     pop  rcx
     pop  rbx
@@ -131,7 +226,7 @@ slurp:
     xor  edx, edx
     syscall
     test rax, rax
-    js   .err
+    js   slperr
     mov  rbx, rax
     xor  eax, eax
     mov  edi, ebx
@@ -145,7 +240,7 @@ slurp:
     pop  rax
     pop  rbx
     ret
-.err:
+slperr:
     xor  eax, eax
     pop  rbx
     ret
@@ -153,51 +248,51 @@ slurp:
 skipws:
     movzx ecx, byte [rbx]
     cmp   ecx, 32
-    je    .sp
+    je    skpspc
     cmp   ecx, 9
-    je    .sp
+    je    skpspc
     ret
-.sp:
+skpspc:
     inc   rbx
     jmp   skipws
 
 atoi:
     xor  eax, eax
-.d:
+atloop:
     movzx edx, byte [rbx]
     sub   edx, '0'
-    js    .fin
+    js    atdone
     cmp   edx, 9
-    jg    .fin
+    jg    atdone
     imul  rax, rax, 10
     add   eax, edx
     inc   rbx
-    jmp   .d
-.fin:
+    jmp   atloop
+atdone:
     ret
 
 cmpn:
     push rsi
     push rdi
     push rcx
-.c:
+cmploop:
     test  rcx, rcx
-    jz    .yes
+    jz    cmpok
     movzx r8d, byte [rsi]
     movzx r9d, byte [rdi]
     cmp   r8d, r9d
-    jne   .no
+    jne   cmpno
     inc   rsi
     inc   rdi
     dec   rcx
-    jmp   .c
-.yes:
+    jmp   cmploop
+cmpok:
     xor  eax, eax
     pop  rcx
     pop  rdi
     pop  rsi
     ret
-.no:
+cmpno:
     mov  eax, 1
     pop  rcx
     pop  rdi
@@ -206,53 +301,51 @@ cmpn:
 
 getenv:
     mov r8, [envptr]
-.lp:
+envloop:
     mov rdi, [r8]
     test rdi, rdi
-    jz .fail
+    jz enverr
     push rsi
     push rdi
-.chr:
+envchk:
     movzx eax, byte [rsi]
     test eax, eax
-    jz .mtc
+    jz envok
     movzx ebx, byte [rdi]
     cmp eax, ebx
-    jne .nxt
+    jne envnxt
     inc rsi
     inc rdi
-    jmp .chr
-.mtc:
+    jmp envchk
+envok:
     mov rax, rdi
     pop rdi
     pop rsi
     ret
-.nxt:
+envnxt:
     pop rdi
     pop rsi
     add r8, 8
-    jmp .lp
-.fail:
+    jmp envloop
+enverr:
     xor eax, eax
     ret
 
 sysfsr:
     call slurp
     test rax, rax
-    jz .err
+    jz syserr
     lea rbx, [rawbuf]
     add rbx, rax
     dec rbx
     cmp byte [rbx], 10
-    jne .prt
+    jne sysprt
     mov byte [rbx], 0
-.prt:
-    lea rsi, [rawbuf]
-    call append
+sysprt:
+    PRT rawbuf
     ret
-.err:
-    lea rsi, [unk]
-    call append
+syserr:
+    PRT unk
     ret
 
 memparse:
@@ -266,68 +359,68 @@ memparse:
     lea  rdi, [p_mem]
     call slurp
     test rax, rax
-    jz   .fin
+    jz   memdone
     mov  byte [rawbuf+rax], 0
     lea  rbx, [rawbuf]
-.scn:
+memloop:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .fin
+    jz    memdone
     lea   rsi, [k_memt]
     mov   rdi, rbx
     mov   ecx, 9
     call  cmpn
-    jnz   .t2
+    jnz   memt2
     add   rbx, 9
     call  skipws
     call  atoi
     mov   [memt], rax
-    jmp   .nl
-.t2:
+    jmp   memnl
+memt2:
     lea   rsi, [k_mema]
     mov   rdi, rbx
     mov   ecx, 13
     call  cmpn
-    jnz   .t3
+    jnz   memt3
     add   rbx, 13
     call  skipws
     call  atoi
     mov   [mema], rax
-    jmp   .nl
-.t3:
+    jmp   memnl
+memt3:
     lea   rsi, [k_swpt]
     mov   rdi, rbx
     mov   ecx, 9
     call  cmpn
-    jnz   .t4
+    jnz   memt4
     add   rbx, 9
     call  skipws
     call  atoi
     mov   [swpt], rax
-    jmp   .nl
-.t4:
+    jmp   memnl
+memt4:
     lea   rsi, [k_swpf]
     mov   rdi, rbx
     mov   ecx, 9
     call  cmpn
-    jnz   .skp
+    jnz   memskp
     add   rbx, 9
     call  skipws
     call  atoi
     mov   [swpf], rax
-.skp:
-.nl:
+memskp:
+memnl:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .fin
+    jz    memdone
     cmp   ecx, 10
-    je    .stp
+    je    memnxt
     inc   rbx
-    jmp   .nl
-.stp:
+    jmp   memnl
+memnxt:
     inc   rbx
-    jmp   .scn
-.fin:
+    jmp   memloop
+memdone:
     pop  rcx
     pop  rbx
     ret
@@ -338,53 +431,52 @@ osname:
     lea  rdi, [p_os]
     call slurp
     test rax, rax
-    jz   .fail
+    jz   oserr
     mov  byte [rawbuf+rax], 0
     lea  rbx, [rawbuf]
-.scn:
+osloop:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .fail
+    jz    oserr
     lea   rsi, [k_pn]
     mov   rdi, rbx
     mov   ecx, 12
     call  cmpn
-    jnz   .nxt
+    jnz   oschk
     add   rbx, 12
     movzx ecx, byte [rbx]
     cmp   ecx, 34
-    jne   .cpy
+    jne   oscpy
     inc   rbx
-.cpy:
+oscpy:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .fin
+    jz    osdone
     cmp   ecx, 34
-    je    .fin
+    je    osdone
     cmp   ecx, 10
-    je    .fin
+    je    osdone
     mov   cl, byte [rbx]
     call  putch
     inc   rbx
-    jmp   .cpy
-.fin:
+    jmp   oscpy
+osdone:
     pop  rcx
     pop  rbx
     ret
-.nxt:
+oschk:
     movzx ecx, byte [rbx]
     test  ecx, ecx
-    jz    .fail
+    jz    oserr
     cmp   ecx, 10
-    je    .stp
+    je    osnxt
     inc   rbx
-    jmp   .nxt
-.stp:
+    jmp   oschk
+osnxt:
     inc   rbx
-    jmp   .scn
-.fail:
-    lea  rsi, [unk]
-    call append
+    jmp   osloop
+oserr:
+    PRT unk
     pop  rcx
     pop  rbx
     ret
@@ -411,6 +503,12 @@ getcpu:
     mov  [rdi+44], edx
     mov  byte [rdi+48], 0
     lea  rax, [rawbuf+6000]
+cpuskp:
+    cmp  byte [rax], 32
+    jne  cpudone
+    inc  rax
+    jmp  cpuskp
+cpudone:
     ret
 
 getip:
@@ -421,7 +519,7 @@ getip:
     xor edx, edx
     syscall
     test eax, eax
-    js .fail
+    js iperr
     mov ebx, eax
     mov eax, 42
     mov edi, ebx
@@ -436,25 +534,15 @@ getip:
     mov eax, 3
     mov edi, ebx
     syscall
-    movzx eax, byte [saddr+4]
-    call numcat
-    lea rsi, [s_dot]
-    call append
-    movzx eax, byte [saddr+5]
-    call numcat
-    lea rsi, [s_dot]
-    call append
-    movzx eax, byte [saddr+6]
-    call numcat
-    lea rsi, [s_dot]
-    call append
+    IPOCT 4
+    IPOCT 5
+    IPOCT 6
     movzx eax, byte [saddr+7]
     call numcat
     pop rbp
     ret
-.fail:
-    lea rsi, [unk]
-    call append
+iperr:
+    PRT unk
     pop rbp
     ret
 
@@ -464,32 +552,24 @@ getdsk:
     lea rsi, [rawbuf+4000]
     syscall
     test eax, eax
-    js .fail
-    mov rax, [rawbuf+4000+16]
-    sub rax, [rawbuf+4000+24]
-    mov rcx, [rawbuf+4000+8]
+    js dskerr
+    mov rax, [rawbuf+4016]
+    sub rax, [rawbuf+4024]
+    mov rcx, [rawbuf+4008]
     mul rcx
-    mov rcx, 1073741824
-    xor rdx, rdx
-    div rcx
+    shr rax, 30
     call numcat
-    lea rsi, [s_gb]
-    call append
-    lea rsi, [s_sep]
-    call append
-    mov rax, [rawbuf+4000+16]
-    mov rcx, [rawbuf+4000+8]
+    PRT s_gb
+    PRT s_sep
+    mov rax, [rawbuf+4016]
+    mov rcx, [rawbuf+4008]
     mul rcx
-    mov rcx, 1073741824
-    xor rdx, rdx
-    div rcx
+    shr rax, 30
     call numcat
-    lea rsi, [s_gb]
-    call append
+    PRT s_gb
     ret
-.fail:
-    lea rsi, [unk]
-    call append
+dskerr:
+    PRT unk
     ret
 
 getpkg:
@@ -499,37 +579,37 @@ getpkg:
     xor edx, edx
     syscall
     test eax, eax
-    js .dpkg
-    jmp .cnt
-.dpkg:
+    js pkgdpkg
+    jmp pkgcnt
+pkgdpkg:
     mov eax, 2
     lea rdi, [p_dpkg]
     xor esi, esi
     xor edx, edx
     syscall
     test eax, eax
-    js .fail
-.cnt:
+    js pkgerr
+pkgcnt:
     mov ebx, eax
     xor r12, r12
-.rd:
+pkgrd:
     mov eax, 217
     mov edi, ebx
     lea rsi, [rawbuf+2000]
     mov edx, 2000
     syscall
     test eax, eax
-    jle .fin
+    jle pkgdone
     mov r8, rax
     xor r9, r9
-.prs:
+pkgprs:
     cmp r9, r8
-    jge .rd
+    jge pkgrd
     movzx rcx, word [rawbuf+2000+r9+16]
     inc r12
     add r9, rcx
-    jmp .prs
-.fin:
+    jmp pkgprs
+pkgdone:
     mov eax, 3
     mov edi, ebx
     syscall
@@ -537,21 +617,76 @@ getpkg:
     mov rax, r12
     call numcat
     ret
-.fail:
-    lea rsi, [unk]
+pkgerr:
+    PRT unk
+    ret
+
+getgpu:
+    push rbx
+    push rcx
+    lea rdi, [p_gpuv]
+    call slurp
+    test rax, rax
+    jz gperr
+    mov rax, [rawbuf]
+    mov [rawbuf+5000], rax
+    mov byte [rawbuf+5006], ':'
+    lea rdi, [p_gpud]
+    call slurp
+    test rax, rax
+    jz gperr
+    mov rax, [rawbuf]
+    mov [rawbuf+5007], rax
+    mov byte [rawbuf+5013], 0
+    lea rbx, [gpudb]
+gploop:
+    movzx ecx, byte [rbx]
+    test ecx, ecx
+    jz gpraw
+    lea rsi, [rawbuf+5000]
+    mov rdi, rbx
+    mov ecx, 13
+    call cmpn
+    test eax, eax
+    jz gpmat
+gpskp1:
+    movzx ecx, byte [rbx]
+    inc rbx
+    test ecx, ecx
+    jnz gpskp1
+gpskp2:
+    movzx ecx, byte [rbx]
+    inc rbx
+    test ecx, ecx
+    jnz gpskp2
+    jmp gploop
+gpmat:
+    add rbx, 14
+    lea rsi, [rbx]
     call append
+    pop rcx
+    pop rbx
+    ret
+gpraw:
+    lea rsi, [rawbuf+5000]
+    call append
+    pop rcx
+    pop rbx
+    ret
+gperr:
+    PRT unk
+    pop rcx
+    pop rbx
     ret
 
 envprt:
     call getenv
     test rax, rax
-    jz .unk
-    mov rsi, rax
-    call append
+    jz enverr2
+    PRT rax
     ret
-.unk:
-    lea rsi, [unk]
-    call append
+enverr2:
+    PRT unk
     ret
 
 flush:
@@ -573,181 +708,117 @@ _start:
     syscall
     call memparse
 
-    ; header
+    ; user
     lea  rsi, [e_usr]
     call getenv
     test rax, rax
-    jz   .nousr
+    jz   stnousr
     mov  rsi, rax
     call append
-.nousr:
-    lea  rsi, [s_at]
-    call append
-    lea  rsi, [un+65]
-    call append
+stnousr:
+    PRT s_at
+    PRT un+65
     call crnl
-    lea  rsi, [s_dash]
-    call append
+    PRT s_dash
 
     ; os
-    lea  rsi, [l_os]
-    call append
+    PRT l_os
     call osname
     call crnl
 
     ; host
-    lea  rsi, [l_host]
-    call append
-    lea  rdi, [p_host]
-    call sysfsr
-    call crnl
+    SYS l_host, p_host
 
     ; kernel
-    lea  rsi, [l_ker]
-    call append
-    lea  rsi, [un+130]
-    call append
+    PRT l_ker
+    PRT un+130
     call crnl
 
     ; uptime
-    lea  rsi, [l_up]
-    call append
+    PRT l_up
     lea  rdi, [p_upt]
     call slurp
     test rax, rax
-    jz   .ufail
+    jz   stupe
     lea  rbx, [rawbuf]
     call atoi
     xor  edx, edx
     mov  ecx, 60
     div  rcx
     call numcat
-    lea  rsi, [s_min]
-    call append
-    jmp  .udone
-.ufail:
-    lea  rsi, [unk]
-    call append
-.udone:
+    PRT s_min
+    jmp  stupd
+stupe:
+    PRT unk
+stupd:
     call crnl
 
-    ; packages
-    lea  rsi, [l_pkg]
-    call append
+    ; pkg
+    PRT l_pkg
     call getpkg
     call crnl
 
-    ; shell
-    lea  rsi, [l_sh]
-    call append
-    lea  rsi, [e_sh]
-    call envprt
-    call crnl
-
-    ; de
-    lea  rsi, [l_de]
-    call append
-    lea  rsi, [e_de]
-    call envprt
-    call crnl
-
-    ; wm
-    lea  rsi, [l_wm]
-    call append
-    lea  rsi, [e_wm]
-    call envprt
-    call crnl
-
-    ; terminal
-    lea  rsi, [l_term]
-    call append
-    lea  rsi, [e_term]
-    call envprt
-    call crnl
+    ; env
+    ENV l_sh, e_sh
+    ENV l_de, e_de
+    ENV l_wm, e_wm
+    ENV l_term, e_term
 
     ; cpu
-    lea  rsi, [l_cpu]
-    call append
+    PRT l_cpu
     call getcpu
     mov  rsi, rax
     call append
     call crnl
 
     ; gpu
-    lea  rsi, [l_gpu]
-    call append
-    lea  rdi, [p_gpuv]
-    call sysfsr
-    lea  rsi, [s_col]
-    call append
-    lea  rdi, [p_gpud]
-    call sysfsr
+    PRT l_gpu
+    call getgpu
     call crnl
 
     ; ram
-    lea  rsi, [l_ram]
-    call append
+    PRT l_ram
     mov  rax, [memt]
     sub  rax, [mema]
-    xor  edx, edx
-    mov  ecx, 1024
-    div  rcx
+    shr  rax, 10
     call numcat
-    lea  rsi, [s_sep]
-    call append
+    PRT s_sep
     mov  rax, [memt]
-    xor  edx, edx
-    mov  ecx, 1024
-    div  rcx
+    shr  rax, 10
     call numcat
-    lea  rsi, [s_mb]
-    call append
+    PRT s_mb
     call crnl
 
     ; swap
-    lea  rsi, [l_swp]
-    call append
+    PRT l_swp
     mov  rax, [swpt]
     mov  rdx, [swpf]
+    xor  rbx, rbx
     cmp  rax, rdx
-    jae  .safe
-    xor  rax, rax
-    xor  rdx, rdx
-.safe:
+    cmovb rax, rbx
+    cmovb rdx, rbx
     sub  rax, rdx
-    xor  edx, edx
-    mov  ecx, 1024
-    div  rcx
+    shr  rax, 10
     call numcat
-    lea  rsi, [s_sep]
-    call append
+    PRT s_sep
     mov  rax, [swpt]
-    xor  edx, edx
-    mov  ecx, 1024
-    div  rcx
+    shr  rax, 10
     call numcat
-    lea  rsi, [s_mb]
-    call append
+    PRT s_mb
     call crnl
 
     ; disk
-    lea  rsi, [l_dsk]
-    call append
+    PRT l_dsk
     call getdsk
     call crnl
 
     ; ip
-    lea  rsi, [l_ip]
-    call append
+    PRT l_ip
     call getip
     call crnl
 
     ; locale
-    lea  rsi, [l_loc]
-    call append
-    lea  rsi, [e_loc]
-    call envprt
-    call crnl
+    ENV l_loc, e_loc
 
     call flush
 
